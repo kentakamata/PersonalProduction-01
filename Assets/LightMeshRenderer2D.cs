@@ -25,6 +25,7 @@ public class ShadowMask2D : MonoBehaviour
 
     void GenerateShadowMesh()
     {
+
         List<Vector3> vertices = new List<Vector3>();
         List<int> triangles = new List<int>();
 
@@ -74,6 +75,7 @@ public class ShadowMask2D : MonoBehaviour
         mesh.SetVertices(vertices);
         mesh.SetTriangles(triangles, 0);
         mesh.RecalculateNormals();
+
     }
 
     Vector3 DirFromAngle(float angle)
