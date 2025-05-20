@@ -18,7 +18,8 @@ public class PlayerController : MonoBehaviour
 
     void Update()
     {
-        if (Input.GetMouseButtonDown(0))
+        // 移動中でないときだけクリック受付
+        if (!moving && Input.GetMouseButtonDown(0))
         {
             Vector3 mouseWorld = Camera.main.ScreenToWorldPoint(Input.mousePosition);
             mouseWorld.z = 0;
@@ -39,6 +40,7 @@ public class PlayerController : MonoBehaviour
             }
         }
 
+        // 移動処理
         if (moving)
         {
             transform.position = Vector3.MoveTowards(transform.position, targetPosition, moveSpeed * Time.deltaTime);
