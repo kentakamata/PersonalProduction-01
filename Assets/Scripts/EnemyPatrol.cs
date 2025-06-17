@@ -1,27 +1,80 @@
 using System.Collections.Generic;
 using UnityEngine;
 
-[RequireComponent(typeof(LineRenderer))]
+[RequireComponent(typeof(SpriteRenderer))]
 public class EnemyPatrol : MonoBehaviour
 {
+    [Header("パトロール設定")]
+    [Tooltip("敵が巡回するパトロールポイントのリスト")]
     public List<Transform> patrolPoints;
+
+    [Tooltip("通常時の移動速度")]
     public float patrolSpeed = 2f;
+
+    [Tooltip("プレイヤー追跡時の移動速度")]
     public float chaseSpeed = 4f;
+
+    [Tooltip("パトロールポイント到達時に停止する秒数")]
+    public float stopDuration = 1f;
+
+    [Tooltip("向きを変えるスピード")]
+    public float turnSpeed = 5f;
+
+    [Header("視野設定")]
+    [Tooltip("プレイヤーのTransform")]
     public Transform player;
+
+    [Tooltip("敵の視野半径")]
     public float viewRadius = 5f;
-    [Range(0, 360)] public float viewAngle = 90f;
+
+    [Tooltip("視野の角度（度）")]
+    [Range(0, 360)]
+    public float viewAngle = 90f;
+
+    [Tooltip("視野メッシュの分割数")]
+    public int rayCount = 60;
+
+    [Tooltip("視野を遮るレイヤー")]
     public LayerMask obstacleMask;
+
+    [Header("視野メッシュ")]
+    [Tooltip("視野メッシュを描画する GameObject（MeshRenderer 付き）")]
+    public GameObject visionMeshObject;
+
+    [Tooltip("視野メッシュのマテリアル（Unlit など）")]
+    public Material visionMaterial;
 
     private int currentPointIndex = 0;
     private bool isChasing = false;
-    private Vector3 currentDirection = Vector3.right; // 進行方向の初期値
+    private bool isWaiting = false;
+    private float waitTimer = 0f;
 
-    private LineRenderer visionRenderer;
+    private Vector3 currentDirection = Vector3.right;
+
+    private Mesh mesh;
+    private MeshFilter meshFilter;
+    private MeshRenderer meshRenderer;
 
     void Start()
     {
-        visionRenderer = GetComponent<LineRenderer>();
-        visionRenderer.positionCount = 0;
+        if (visionMeshObject == null)
+        {
+            Debug.LogError("visionMeshObject を設定してください。");
+            enabled = false;
+            return;
+        }
+
+        meshFilter = visionMeshObject.GetComponent<MeshFilter>() ?? visionMeshObject.AddComponent<MeshFilter>();
+        meshRenderer = visionMeshObject.GetComponent<MeshRenderer>() ?? visionMeshObject.AddComponent<MeshRenderer>();
+
+        mesh = new Mesh { name = "Enemy View Mesh" };
+        meshFilter.mesh = mesh;
+
+        if (visionMaterial != null)
+            meshRenderer.material = visionMaterial;
+
+        visionMeshObject.transform.SetParent(transform);
+        visionMeshObject.transform.localPosition = Vector3.zero;
     }
 
     void Update()
@@ -44,7 +97,7 @@ public class EnemyPatrol : MonoBehaviour
             Patrol();
         }
 
-        DrawView();
+        GenerateViewMesh();
     }
 
     void Patrol()
@@ -52,19 +105,36 @@ public class EnemyPatrol : MonoBehaviour
         if (patrolPoints.Count == 0) return;
 
         Vector3 target = patrolPoints[currentPointIndex].position;
-        MoveTowards(target, patrolSpeed);
+        float distance = Vector3.Distance(transform.position, target);
 
-        if (Vector3.Distance(transform.position, target) < 0.2f)
+        if (isWaiting)
         {
-            currentPointIndex = (currentPointIndex + 1) % patrolPoints.Count;
+            waitTimer += Time.deltaTime;
+            if (waitTimer >= stopDuration)
+            {
+                waitTimer = 0f;
+                isWaiting = false;
+                currentPointIndex = (currentPointIndex + 1) % patrolPoints.Count;
+            }
+            return;
         }
+
+        if (distance < 0.2f && !isWaiting)
+        {
+            isWaiting = true;
+            return;
+        }
+
+        Vector3 dir = (target - transform.position).normalized;
+        currentDirection = Vector3.Lerp(currentDirection, dir, Time.deltaTime * turnSpeed);
+        transform.position += currentDirection * patrolSpeed * Time.deltaTime;
     }
 
     void MoveTowards(Vector3 target, float speed)
     {
         Vector3 dir = (target - transform.position).normalized;
-        currentDirection = dir; // 進行方向を保存
-        transform.position += dir * speed * Time.deltaTime;
+        currentDirection = Vector3.Lerp(currentDirection, dir, Time.deltaTime * turnSpeed);
+        transform.position += currentDirection * speed * Time.deltaTime;
     }
 
     bool CanSeePlayer()
@@ -88,35 +158,42 @@ public class EnemyPatrol : MonoBehaviour
         return false;
     }
 
-    void DrawView()
+    void GenerateViewMesh()
     {
-        int steps = 30;
-        float stepAngle = viewAngle / steps;
-        visionRenderer.positionCount = steps + 1;
-        visionRenderer.startWidth = 0.05f;
-        visionRenderer.endWidth = 0.05f;
+        List<Vector3> vertices = new List<Vector3> { Vector3.zero };
+        List<int> triangles = new List<int>();
 
-        for (int i = 0; i <= steps; i++)
+        float angleStep = viewAngle / rayCount;
+        float startAngle = -viewAngle / 2f;
+
+        for (int i = 0; i <= rayCount; i++)
         {
-            float angleOffset = -viewAngle / 2 + stepAngle * i;
-            Vector3 dir = DirFromAngle(angleOffset);
-            Vector3 endPoint = transform.position + dir * viewRadius;
-
+            float angle = startAngle + angleStep * i;
+            Vector3 dir = DirFromAngle(angle);
             RaycastHit2D hit = Physics2D.Raycast(transform.position, dir, viewRadius, obstacleMask);
-            if (hit.collider != null)
-            {
-                endPoint = hit.point;
-            }
-
-            visionRenderer.SetPosition(i, endPoint);
+            Vector3 hitPoint = hit ? (Vector3)hit.point : transform.position + dir * viewRadius;
+            Vector3 localPoint = visionMeshObject.transform.InverseTransformPoint(hitPoint);
+            vertices.Add(localPoint);
         }
+
+        for (int i = 1; i < vertices.Count - 1; i++)
+        {
+            triangles.Add(0);
+            triangles.Add(i);
+            triangles.Add(i + 1);
+        }
+
+        mesh.Clear();
+        mesh.SetVertices(vertices);
+        mesh.SetTriangles(triangles, 0);
+        mesh.RecalculateNormals();
     }
 
     Vector3 DirFromAngle(float angleOffset)
     {
         float baseAngle = Mathf.Atan2(currentDirection.y, currentDirection.x) * Mathf.Rad2Deg;
         float finalAngle = baseAngle + angleOffset;
-        float rad = Mathf.Deg2Rad * finalAngle;
+        float rad = finalAngle * Mathf.Deg2Rad;
         return new Vector3(Mathf.Cos(rad), Mathf.Sin(rad));
     }
 }
