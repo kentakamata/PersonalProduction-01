@@ -1,72 +1,95 @@
-using System.Collections.Generic;
+ï»¿using System.Collections.Generic;
 using UnityEngine;
 
 [RequireComponent(typeof(MeshFilter), typeof(MeshRenderer))]
 public class ShadowMask2D : MonoBehaviour
 {
+    [Header("åŸºæœ¬è¨­å®š")]
+    public float personalViewRadius = 5f;
+    public float outerRadius = 30f;
+    [Range(3, 360)]
+    public int resolution = 100;
     public LayerMask wallMask;
-    public float viewRadius = 8f;
-    public int rayCount = 360;
-    public float outerRadius = 50f;
+
+    [Header("å…±æœ‰ã‚¿ã‚°è¨­å®š")]
+    public string itemTag = "Item";
+
+    [Header("æç”»è¨­å®š")]
+    public string sortingLayerName = "Default";
+    public int sortingOrder = -10;
 
     private Mesh mesh;
 
     void Start()
     {
-        mesh = new Mesh();
-        mesh.name = "Shadow Mask Mesh";
+        mesh = new Mesh { name = "ShadowMask2D Mesh" };
         GetComponent<MeshFilter>().mesh = mesh;
+
+        var renderer = GetComponent<MeshRenderer>();
+        renderer.sortingLayerName = sortingLayerName;
+        renderer.sortingOrder = sortingOrder;
     }
 
     void LateUpdate()
     {
-        GenerateShadowMesh();
+        GenerateCombinedMask();
     }
 
-    void GenerateShadowMesh()
+    void GenerateCombinedMask()
     {
         List<Vector3> vertices = new List<Vector3>();
         List<int> triangles = new List<int>();
 
-        float angleStep = 360f / rayCount;
+        Vector3 center = transform.InverseTransformPoint(transform.position);
+        float angleStep = 360f / resolution;
 
-        // ŠO‘¤ƒh[ƒiƒc‚Ì‰~ü‚ğì‚éiŠOü‰~j
-        for (int i = 0; i <= rayCount; i++)
+        // å¤–å‘¨
+        for (int i = 0; i <= resolution; i++)
         {
-            float angle = i * angleStep;
-            Vector3 dir = DirFromAngle(angle);
-            vertices.Add(dir * outerRadius);
+            float rad = Mathf.Deg2Rad * i * angleStep;
+            Vector3 dir = new Vector3(Mathf.Cos(rad), Mathf.Sin(rad));
+            vertices.Add(center + dir * outerRadius);
         }
 
-        int innerOffset = vertices.Count;
+        int innerStart = vertices.Count;
 
-        // ‹ŠE‚Ì“à‰~iraycast Œ‹‰Êj‚ğì‚é
-        for (int i = 0; i <= rayCount; i++)
+        // å†…å‘¨ï¼ˆãƒ—ãƒ¬ã‚¤ãƒ¤ãƒ¼è¦–ç•Œï¼‹å…±æœ‰è¦–ç•Œï¼‰
+        for (int i = 0; i <= resolution; i++)
         {
-            float angle = i * angleStep;
-            Vector3 dir = DirFromAngle(angle);
-            RaycastHit2D hit = Physics2D.Raycast(transform.position, dir, viewRadius, wallMask);
+            float rad = Mathf.Deg2Rad * i * angleStep;
+            Vector3 dir = new Vector3(Mathf.Cos(rad), Mathf.Sin(rad));
+            Vector3 best = transform.position + dir * 0.1f;
+            float maxVisible = 0f;
 
-            Vector3 hitPointWorld = hit ? (Vector3)hit.point : transform.position + dir * viewRadius;
-            Vector3 local = transform.InverseTransformPoint(hitPointWorld);
-            vertices.Add(local);
+            // â‘  ãƒ—ãƒ¬ã‚¤ãƒ¤ãƒ¼è‡ªèº«ã®è¦–ç•Œ
+            EvaluateSource(transform.position, personalViewRadius, dir, ref best, ref maxVisible);
+
+            // â‘¡ å…±æœ‰å¯èƒ½ãªã‚¢ã‚¤ãƒ†ãƒ è¦–ç•Œï¼ˆãƒ—ãƒ¬ã‚¤ãƒ¤ãƒ¼ãŒè¿‘ã„å ´åˆï¼‰
+            foreach (GameObject item in GameObject.FindGameObjectsWithTag(itemTag))
+            {
+                ItemVision iv = item.GetComponent<ItemVision>();
+                if (iv == null) continue;
+
+                float dist = Vector2.Distance(transform.position, item.transform.position);
+                if (dist <= iv.shareRadius)
+                {
+                    EvaluateSource(item.transform.position, iv.visionRadius, dir, ref best, ref maxVisible);
+                }
+            }
+
+            vertices.Add(transform.InverseTransformPoint(best));
         }
 
-        // OŠpŒ`‚ğ‚Â‚È‚®iŠOü ¨ “àüj
-        for (int i = 0; i < rayCount; i++)
+        // ä¸‰è§’å½¢æ§‹ç¯‰
+        for (int i = 0; i < resolution; i++)
         {
             int outerA = i;
             int outerB = i + 1;
-            int innerA = innerOffset + i;
-            int innerB = innerOffset + i + 1;
+            int innerA = innerStart + i;
+            int innerB = innerStart + i + 1;
 
-            triangles.Add(outerA);
-            triangles.Add(outerB);
-            triangles.Add(innerB);
-
-            triangles.Add(outerA);
-            triangles.Add(innerB);
-            triangles.Add(innerA);
+            triangles.Add(outerA); triangles.Add(outerB); triangles.Add(innerB);
+            triangles.Add(outerA); triangles.Add(innerB); triangles.Add(innerA);
         }
 
         mesh.Clear();
@@ -75,40 +98,19 @@ public class ShadowMask2D : MonoBehaviour
         mesh.RecalculateNormals();
     }
 
-    Vector3 DirFromAngle(float angle)
+    /// <summary>
+    /// ãƒ¬ã‚¤ã‚’é£›ã°ã—ã¦è¦–ç•Œç«¯ç‚¹ã‚’æ±ºå®š
+    /// </summary>
+    void EvaluateSource(Vector3 origin, float radius, Vector3 dir, ref Vector3 best, ref float maxDist)
     {
-        float rad = Mathf.Deg2Rad * angle;
-        return new Vector3(Mathf.Cos(rad), Mathf.Sin(rad));
-    }
+        RaycastHit2D hit = Physics2D.Raycast(origin, dir, radius, wallMask);
+        Vector3 end = hit ? hit.point : origin + dir * radius;
 
-    // w’è‚µ‚½ƒ[ƒ‹ƒhÀ•W‚ª‹ŠE“à‚©”»’è
-    public bool IsVisible(Vector3 worldPos)
-    {
-        if (mesh == null || mesh.vertexCount == 0) return false;
-
-        Vector3 localPos = transform.InverseTransformPoint(worldPos);
-        // •‚¢•”•ª‚ªƒ|ƒŠƒSƒ“‚È‚Ì‚ÅA•‚¢•”•ª‚ÉŠÜ‚Ü‚ê‚Ä‚¢‚ê‚Î false ‚ğ•Ô‚·
-        return !PointInPolygon(localPos, mesh.vertices);
-    }
-
-    // ƒ|ƒŠƒSƒ““à”»’èiŠï”Œğ·–@j
-    bool PointInPolygon(Vector2 point, Vector3[] polygon)
-    {
-        int count = polygon.Length;
-        bool inside = false;
-
-        for (int i = 0, j = count - 1; i < count; j = i++)
+        float dist = Vector3.Distance(transform.position, end);
+        if (dist > maxDist)
         {
-            Vector2 pi = new Vector2(polygon[i].x, polygon[i].y);
-            Vector2 pj = new Vector2(polygon[j].x, polygon[j].y);
-
-            if (((pi.y > point.y) != (pj.y > point.y)) &&
-                (point.x < (pj.x - pi.x) * (point.y - pi.y) / (pj.y - pi.y + Mathf.Epsilon) + pi.x))
-            {
-                inside = !inside;
-            }
+            best = end;
+            maxDist = dist;
         }
-
-        return inside;
     }
 }
